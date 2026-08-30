@@ -164,10 +164,18 @@ static std::string parse_tool_calls(const std::string & text, std::vector<Parsed
     std::string out = text.substr(0, scan);
     size_t pos = scan;
     while (true) {
-        const size_t tc = text.find("<tool_call>", pos);
+        const size_t may_tc = text.find("<tool_call>", pos);
+        const size_t tc = (may_tc != std::string::npos)
+            ? may_tc
+            : text.find("<function=", pos);
+        // Qwen3.5-122B-A10B generates broken <function=...>...</function_call>
+        const size_t tce = (may_tc == tc)
+            ? text.find("</tool_call>", tc)
+            : std::min(text.find("</function>", tc), text.find("</function_call>", tc));
         if (tc == std::string::npos) { out += text.substr(pos); break; }
-        const size_t tce = text.find("</tool_call>", tc);
         if (tce == std::string::npos) { out += text.substr(pos); break; }
+        const size_t tce_close = text.find(">", tce);
+        const size_t tce_size = tce_close - tce + 1;
         out += text.substr(pos, tc - pos);
         const std::string block = text.substr(tc, tce - tc);
 
@@ -215,8 +223,8 @@ static std::string parse_tool_calls(const std::string & text, std::vector<Parsed
                 parsed = true;
             }
         }
-        if (!parsed) out += text.substr(tc, tce + 12 - tc);   // malformed: keep as content
-        pos = tce + 12;
+        if (!parsed) out += text.substr(tc, tce + tce_size - tc);   // malformed: keep as content
+        pos = tce + tce_size;
     }
     // trim trailing whitespace left by block removal
     while (!out.empty() && (out.back() == '\n' || out.back() == ' ')) out.pop_back();
