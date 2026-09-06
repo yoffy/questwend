@@ -143,6 +143,14 @@ static std::string split_reasoning(const std::string & text, std::string & reaso
     return rest;
 }
 
+static std::string to_lower(std::string_view src) {
+    std::string dst(src);
+    std::transform(dst.begin(), dst.end(), dst.begin(), [](unsigned char c) {
+        return std::tolower(c);
+    });
+    return dst;
+}
+
 // Parse Qwen3.6-format tool calls out of generated text:
 //   <tool_call>\n<function=NAME>\n<parameter=K>\nV\n</parameter>...\n</function>\n</tool_call>
 // Returns the text with the tool-call blocks removed; parsed calls go to `calls`
@@ -164,12 +172,13 @@ static std::string parse_tool_calls(const std::string & text, std::vector<Parsed
     std::string out = text.substr(0, scan);
     size_t pos = scan;
     while (true) {
-        const size_t may_tc = text.find("<tool_call>", pos);
-        const size_t tc = (may_tc != std::string::npos)
-            ? may_tc
-            : text.find("<function=", pos);
         // Qwen3.5-122B-A10B generates broken <function=...>...</function_call>
-        const size_t tce = (may_tc == tc)
+        // Qwen3.8-Flash-Next generate broken <parameter=...>...</function></tool_call>
+        const size_t may_tc = text.find("<tool_call>", pos);
+        const size_t may_fn = text.find("<function=", pos);
+        const size_t may_ps = text.find("<parameter=", pos);
+        const size_t tc = std::min({may_tc, may_fn, may_ps});
+        const size_t tce = (may_tc != std::string::npos)
             ? text.find("</tool_call>", tc)
             : std::min(text.find("</function>", tc), text.find("</function_call>", tc));
         if (tc == std::string::npos) { out += text.substr(pos); break; }
@@ -181,13 +190,50 @@ static std::string parse_tool_calls(const std::string & text, std::vector<Parsed
 
         ParsedToolCall call;
         bool parsed = false;
-        const size_t fn = block.find("<function=");
+        const auto [fn, fnv] = [&]() -> std::pair<size_t, size_t> {
+            const size_t may_fn = block.find("<function=");
+            if (may_fn != std::string::npos) {
+                return std::make_pair(may_fn, size_t(10));
+            }
+
+            const size_t may_ps = block.find("<parameter=");
+            if (may_ps == std::string::npos) {
+                return std::make_pair(std::string::npos, std::string::npos);
+            }
+
+            const size_t pe = block.find('>', may_ps);
+            if (pe == std::string::npos) {
+                return std::make_pair(std::string::npos, std::string::npos);
+            }
+
+            // builtin tools
+            // https://opencode.ai/en/docs/tools
+            const std::string name = to_lower(block.substr(may_ps + 11, pe - may_ps - 11));
+            static constexpr std::string_view tools[] = {
+                "bash", "edit", "write", "read", "grep", "glob", "lsp", "apply_patch",
+                "skill", "todowrite", "webfetch", "websearch", "question",
+
+                "command",
+            };
+            if (std::find(std::begin(tools), std::end(tools), name) != std::end(tools)) {
+                return std::make_pair(may_ps, size_t(11));
+            }
+
+            return std::make_pair(std::string::npos, std::string::npos);
+        }();
         if (fn != std::string::npos) {
             const size_t fe = block.find('>', fn);
             if (fe != std::string::npos) {
-                call.name = block.substr(fn + 10, fe - fn - 10);
-                json args = json::object();
                 size_t pp = fe;
+                // Qwen3.8-Flash-Next generate broken <parameter="command">...</function></tool_call>
+                if (auto name = block.substr(fn + fnv, fe - fn - fnv); name == "command") {
+                    // convert to "Bash"
+                    call.name = "Bash";
+                    pp = fn; // rewind
+                } else {
+                    call.name = name;
+                }
+                json args = json::object();
                 while (true) {
                     const size_t ps = block.find("<parameter=", pp);
                     if (ps == std::string::npos) break;
