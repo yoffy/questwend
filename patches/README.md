@@ -9,6 +9,7 @@
 |---|---|---|
 | 01 | `01-qwencpp-metal-mmid-blocked.patch` | Metal `mm_id_map0` を expert ブロック単位ループに変更。expert キャッシュのスロットプールは `ne02` が threadgroup のスレッド上限を超えるため、upstream の `GGML_ASSERT(ne02 <= max_threads)` では動かない。`QWEN_METAL_MMID_MV=1` で mat-vec 経路に強制切替する A/B スイッチも含む |
 | 02 | `02-qwencpp-cuda-quiet-graph-logs.patch` | CUDA graph の `GGML_LOG_DEBUG` 3 行を削除（グラフキーごとに毎回出て自前のログを埋める） |
+| 03 | `03-qwencpp-metal-nvfp4.patch` | Metal に NVFP4 (`GGML_TYPE_NVFP4`) 対応を追加。upstream は `MUL_MAT/MUL_MAT_ID/GET_ROWS` を `supports_op` で拒否しシェーダも MXFP4 のみ。`ue4m3_to_fp32` + `dequantize_nvfp4[_t4]` と `mul_mv/mul_mv_ext/mul_mm/mul_mm_id/mul_mv_id/get_rows` カーネルを MXFP4 にならって追加（NVFP4 は QK=64・サブブロック毎 UE4M3 スケール4B + E2M1 32B） |
 
 > サブ 1bit 量子化（`IQ1_XS` / `IQ1_XXS` / `IQ1_XXXS`）は **`iq1-narrow` ブランチ**に分けてあります。
 > 本家 llama.cpp に取り込まれたら、そのブランチを捨てて通常の再 vendor で拾えば済みます。
